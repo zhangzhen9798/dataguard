@@ -17,8 +17,21 @@ class Rule:
     threshold: float = 1.0  # Pass rate threshold (0.0 - 1.0), 1.0 = 100% must pass
 
     def __post_init__(self):
-        if not self.check_name:
-            self.check_name = self.check.__name__
+        if self.check_name:
+            return
+        name = getattr(self.check, "__name__", "custom")
+        if name == "_check":
+            # For closure-based checks from checks.py, try to get the wrapped name
+            name = getattr(self.check, "__qualname__", "custom")
+            if "." in name:
+                name = "custom"
+        self.check_name = name
+
+        # Validate threshold range
+        if not (0.0 <= self.threshold <= 1.0):
+            raise ValueError(
+                f"threshold must be between 0.0 and 1.0, got {self.threshold}"
+            )
 
 
 class RuleSet:

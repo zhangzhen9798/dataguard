@@ -38,10 +38,24 @@ class DataGuard:
 
     @staticmethod
     def _detect_engine(dataframe: Any, engine: Optional[str]) -> str:
-        """Detect whether to use Pandas or Spark engine."""
+        """Detect whether to use Pandas or Spark engine.
+
+        Args:
+            dataframe: The DataFrame to inspect.
+            engine: Explicitly specified engine, if any.
+
+        Returns:
+            Engine name string ('pandas' or 'spark').
+
+        Raises:
+            ValueError: If an unsupported engine name is provided.
+            TypeError: If the dataframe type is not recognized.
+        """
         if engine is not None:
             if engine not in ("pandas", "spark"):
-                raise ValueError(f"Unsupported engine: {engine}. Use 'pandas' or 'spark'.")
+                raise ValueError(
+                    f"Unsupported engine: '{engine}'. Use 'pandas' or 'spark'."
+                )
             return engine
 
         type_name = type(dataframe).__module__
@@ -50,8 +64,10 @@ class DataGuard:
         elif "pyspark" in type_name or "spark" in type_name:
             return "spark"
         else:
-            # Default to pandas
-            return "pandas"
+            raise TypeError(
+                f"Unsupported dataframe type: {type(dataframe).__name__}. "
+                "Expected a Pandas DataFrame or PySpark DataFrame."
+            )
 
     @property
     def engine(self) -> str:

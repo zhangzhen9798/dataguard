@@ -10,7 +10,11 @@ from typing import Any, Callable, Container, Optional, Pattern
 
 
 def not_null():
-    """Check that value is not None/NaN."""
+    """Check that value is not None/NaN/pd.NA.
+
+    Returns:
+        A check function returning True for non-null values.
+    """
     def _check(value: Any) -> bool:
         if value is None:
             return False
@@ -20,6 +24,13 @@ def not_null():
             if isinstance(value, float) and math.isnan(value):
                 return False
         except (TypeError, ValueError):
+            pass
+        # Handle pd.NA (Pandas 1.0+)
+        try:
+            import pandas as pd
+            if value is pd.NA:
+                return False
+        except (ImportError, AttributeError):
             pass
         return True
     _check.__name__ = "not_null"
@@ -46,7 +57,15 @@ def in_range(min_val: Optional[float] = None, max_val: Optional[float] = None):
     Args:
         min_val: Minimum allowed value (inclusive). None = no lower bound.
         max_val: Maximum allowed value (inclusive). None = no upper bound.
+
+    Raises:
+        ValueError: If both min_val and max_val are None, or if min_val > max_val.
     """
+    if min_val is None and max_val is None:
+        raise ValueError("in_range() requires at least one of min_val or max_val")
+    if (min_val is not None and max_val is not None) and min_val > max_val:
+        raise ValueError(f"in_range(): min_val ({min_val}) cannot be greater than max_val ({max_val})")
+
     def _check(value: Any) -> bool:
         if value is None:
             return True  # Use not_null() for null checks
@@ -69,8 +88,14 @@ def regex_match(pattern: str):
 
     Args:
         pattern: Regular expression pattern string.
+
+    Raises:
+        re.error: If the provided pattern is not a valid regular expression.
     """
-    compiled = re.compile(pattern)
+    try:
+        compiled = re.compile(pattern)
+    except re.error as e:
+        raise ValueError(f"Invalid regex pattern '{pattern}': {e}") from e
 
     def _check(value: Any) -> bool:
         if value is None:
@@ -98,7 +123,18 @@ def in_set(allowed_values: Container):
 
 
 def min_length(min_len: int):
-    """Check that a string value has at least min_len characters."""
+    """
+    Check that a string value has at least min_len characters.
+
+    Args:
+        min_len: Minimum number of characters (must be >= 0).
+
+    Raises:
+        ValueError: If min_len is negative.
+    """
+    if not isinstance(min_len, int) or min_len < 0:
+        raise ValueError(f"min_length() requires a non-negative integer, got {min_len!r}")
+
     def _check(value: Any) -> bool:
         if value is None:
             return True
@@ -108,7 +144,18 @@ def min_length(min_len: int):
 
 
 def max_length(max_len: int):
-    """Check that a string value has at most max_len characters."""
+    """
+    Check that a string value has at most max_len characters.
+
+    Args:
+        max_len: Maximum number of characters (must be >= 0).
+
+    Raises:
+        ValueError: If max_len is negative.
+    """
+    if not isinstance(max_len, int) or max_len < 0:
+        raise ValueError(f"max_length() requires a non-negative integer, got {max_len!r}")
+
     def _check(value: Any) -> bool:
         if value is None:
             return True

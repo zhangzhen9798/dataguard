@@ -2,8 +2,30 @@
 Rule definitions for DataGuard.
 """
 
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Union
 from dataclasses import dataclass, field
+
+from dataguard.checks import (
+    not_null,
+    unique,
+    in_range,
+    regex_match,
+    in_set,
+    min_length,
+    max_length,
+    custom,
+)
+
+# Map check names to factory functions for from_dict()
+_CHECK_REGISTRY: Dict[str, Callable] = {
+    "not_null": not_null,
+    "unique": unique,
+    "in_range": in_range,
+    "regex_match": regex_match,
+    "in_set": in_set,
+    "min_length": min_length,
+    "max_length": max_length,
+}
 
 
 @dataclass
@@ -97,3 +119,41 @@ class RuleSet:
 
     def __repr__(self) -> str:
         return f"RuleSet({len(self._rules)} rules on {len(self.columns())} columns)"
+
+    @classmethod
+    def from_dict(cls, config: Dict[str, List[Dict[str, Any]]]) -> "RuleSet":
+        """Create a RuleSet from a dictionary config.
+
+        Args:
+            config: Mapping of column names to lists of check definitions.
+                Each check definition is a dict with a "check" key (name)
+                and optional "params", "threshold" keys.
+
+        Example:
+            {
+                "age": [
+                    {"check": "not_null"},
+                    {"check": "in_range", "params": {"min_val": 0, "max_val": 120}},
+                ],
+                "email": [
+                    {"check": "regex_match", "params": {"pattern": r"^[\\w.-]+@[\\w.-]+\\.\\w+$"}},
+                ],
+            }
+
+        Raises:
+            ValueError: If a check name is not found in the registry.
+        """
+        ruleset = cls()
+        for column, checks in config.items():
+            for check_def in checks:
+                name = check_def["check"]
+                if name not in _CHECK_REGISTRY:
+                    raise ValueError(
+                        f"Unknown check '{name}'. Available: {list(_CHECK_REGISTRY.keys())}"
+                    )
+                factory = _CHECK_REGISTRY[name]
+                params = check_def.get("params", {})
+                threshold = check_def.get("threshold", 1.0)
+                check_fn = factory(**params)
+                ruleset.add(column, check_fn, threshold=threshold)
+        return ruleset

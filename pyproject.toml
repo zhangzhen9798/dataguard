@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dqguard"
-version = "0.2.0"
+version = "0.3.0"
 description = "Lightweight data quality validation framework for big data pipelines"
 readme = "README.md"
 license = {text = "MIT"}
@@ -34,13 +34,18 @@ dependencies = [
 
 [project.optional-dependencies]
 spark = ["pyspark>=3.0.0"]
+yaml = ["pyyaml>=6.0"]
 dev = [
     "pytest>=7.0",
     "pytest-cov>=4.0",
     "black>=23.0",
     "ruff>=0.1.0",
     "mypy>=1.0",
+    "pre-commit>=3.0",
 ]
+
+[project.scripts]
+dqguard = "dataguard.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/zhangzhen9798/dataguard"

@@ -374,3 +374,45 @@ class TestSecurityChecks:
         check = in_set(["a", "b", "c"])
         assert check("a") is True
         assert check("d") is False
+
+
+# ─── RuleSet.from_dict Tests ──────────────────────────────────────
+
+class TestRuleSetFromDict:
+    def test_basic_from_dict(self):
+        config = {
+            "name": [{"check": "not_null"}],
+            "age": [{"check": "in_range", "params": {"min_val": 0, "max_val": 120}}],
+        }
+        rules = RuleSet.from_dict(config)
+        assert len(rules) == 2
+        assert rules.columns() == ["name", "age"]
+
+    def test_from_dict_with_threshold(self):
+        config = {
+            "status": [{"check": "not_null", "threshold": 0.95}],
+        }
+        rules = RuleSet.from_dict(config)
+        assert rules.rules[0].threshold == 0.95
+
+    def test_from_dict_unknown_check(self):
+        config = {"col": [{"check": "nonexistent"}]}
+        with pytest.raises(ValueError, match="Unknown check"):
+            RuleSet.from_dict(config)
+
+    def test_from_dict_multiple_checks_per_column(self):
+        config = {
+            "age": [
+                {"check": "not_null"},
+                {"check": "in_range", "params": {"min_val": 0, "max_val": 120}},
+            ],
+        }
+        rules = RuleSet.from_dict(config)
+        assert len(rules) == 2
+
+    def test_from_dict_regex_match(self):
+        config = {
+            "email": [{"check": "regex_match", "params": {"pattern": r"^[\w.-]+@[\w.-]+\.\w+$"}}],
+        }
+        rules = RuleSet.from_dict(config)
+        assert len(rules) == 1

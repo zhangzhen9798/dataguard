@@ -346,3 +346,31 @@ class TestReportEdgeCases:
         assert report.is_valid
         assert report.passed_count == 2
         assert report.failed_count == 0
+
+
+# ─── Security Tests ────────────────────────────────────────────────
+
+class TestSecurityChecks:
+    def test_regex_redos_blocked(self):
+        """Dangerous nested quantifier patterns should be rejected."""
+        with pytest.raises(ValueError, match="catastrophic backtracking"):
+            regex_match("(a+)+b")
+
+    def test_regex_redos_star_variant_blocked(self):
+        with pytest.raises(ValueError, match="catastrophic backtracking"):
+            regex_match("(a+)*b")
+
+    def test_regex_normal_pattern_allowed(self):
+        """Normal patterns should still work fine."""
+        check = regex_match(r"^[\w.-]+@[\w.-]+\.\w+$")
+        assert check("test@example.com") is True
+
+    def test_in_set_rejects_non_iterable(self):
+        """Non-iterable allowed_values should raise TypeError."""
+        with pytest.raises(TypeError, match="requires an iterable"):
+            in_set(123)
+
+    def test_in_set_accepts_list(self):
+        check = in_set(["a", "b", "c"])
+        assert check("a") is True
+        assert check("d") is False

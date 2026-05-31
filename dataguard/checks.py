@@ -90,8 +90,14 @@ def regex_match(pattern: str):
         pattern: Regular expression pattern string.
 
     Raises:
-        re.error: If the provided pattern is not a valid regular expression.
+        ValueError: If the pattern is invalid or may cause catastrophic backtracking.
     """
+    # Simple heuristic to detect potentially dangerous nested quantifiers
+    _dangerous_re = re.compile(r'\([^)]*[*+][^)]*\)[*+]')
+    if _dangerous_re.search(pattern):
+        raise ValueError(
+            f"Regex pattern may cause catastrophic backtracking: '{pattern}'"
+        )
     try:
         compiled = re.compile(pattern)
     except re.error as e:
@@ -111,7 +117,14 @@ def in_set(allowed_values: Container):
 
     Args:
         allowed_values: A set, list, or tuple of allowed values.
+
+    Raises:
+        TypeError: If allowed_values is not iterable.
     """
+    if not hasattr(allowed_values, '__contains__') and not hasattr(allowed_values, '__iter__'):
+        raise TypeError(
+            f"in_set() requires an iterable, got {type(allowed_values).__name__}"
+        )
     allowed = set(allowed_values)
 
     def _check(value: Any) -> bool:

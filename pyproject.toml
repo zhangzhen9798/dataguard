@@ -10,7 +10,7 @@ readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.8"
 authors = [
-    {name = "Zhang Zhen", email = "zhangzhen9798@gmail.com"},
+    {name = "Zhang Zhen", email = "zhangzhen9798@users.noreply.github.com"},
 ]
 keywords = ["data-quality", "validation", "spark", "pandas", "big-data", "data-pipeline"]
 classifiers = [
@@ -28,8 +28,8 @@ classifiers = [
     "Topic :: Software Development :: Testing",
 ]
 dependencies = [
-    "pandas>=1.3.0",
-    "numpy>=1.20.0",
+    "pandas>=1.3.0,<3.0.0",
+    "numpy>=1.20.0,<3.0.0",
 ]
 
 [project.optional-dependencies]

@@ -2,10 +2,11 @@
 SQL dialect definitions for DataGuard.
 
 Each dialect specifies how to generate SQL for different database engines.
+All value parameters use SQLAlchemy :bindparam syntax to prevent SQL injection.
 """
 
 from dataclasses import dataclass, field
-from typing import Dict
+from typing import Dict, Optional, Tuple
 
 
 @dataclass
@@ -69,9 +70,13 @@ def get_dialect(name: str) -> Dialect:
 
 
 def quote_id(name: str, dialect: Dialect) -> str:
-    """Quote a SQL identifier (table/column name)."""
-    # Basic validation to prevent injection
-    if not name.replace(".", "").replace("_", "").isalnum():
+    """Quote a SQL identifier (table/column name).
+
+    Validates the identifier to prevent SQL injection before quoting.
+    """
+    # Validate: only alphanumeric, underscores, dots, hyphens
+    cleaned = name.replace(".", "").replace("_", "").replace("-", "")
+    if not cleaned.isalnum():
         raise ValueError(f"Invalid SQL identifier: {name}")
     q = dialect.quote
     # Handle schema.table format
@@ -81,28 +86,21 @@ def quote_id(name: str, dialect: Dialect) -> str:
     return f"{q}{name}{q}"
 
 
-def sql_value(val) -> str:
-    """Convert a Python value to a SQL literal."""
-    if val is None:
-        return "NULL"
-    if isinstance(val, bool):
-        return "TRUE" if val else "FALSE"
-    if isinstance(val, (int, float)):
-        return str(val)
-    # String — escape single quotes
-    escaped = str(val).replace("'", "''")
-    return f"'{escaped}'"
-
-
 # ─── SQL Condition Generation ─────────────────────────────────────
 
-def check_to_condition(check_name: str, params: dict, col: str, dialect: Dialect) -> str:
-    """Translate a check into a SQL WHERE condition.
+def check_to_condition(
+    check_name: str, params: dict, col: str, dialect: Dialect
+) -> Optional[Tuple[str, Dict[str, object]]]:
+    """Translate a check into a SQL WHERE condition with parameterized values.
 
-    Returns the condition that a PASSING row satisfies.
+    Returns a tuple of (condition_sql, bind_params) where bind_params
+    uses SQLAlchemy :param_name syntax, or None if the check cannot
+    be translated to SQL.
+
+    The condition_sql that a PASSING row satisfies.
     """
     if check_name == "not_null":
-        return f"{col} IS NOT NULL"
+        return (f"{col} IS NOT NULL", {})
 
     if check_name == "unique":
         # Unique is handled separately with aggregate queries
@@ -110,36 +108,48 @@ def check_to_condition(check_name: str, params: dict, col: str, dialect: Dialect
 
     if check_name == "in_range":
         parts = []
+        bind_params: Dict[str, object] = {}
         min_val = params.get("min_val")
         max_val = params.get("max_val")
         if min_val is not None:
-            parts.append(f"{col} >= {sql_value(min_val)}")
+            bind_params["dg_min_val"] = min_val
+            parts.append(f"{col} >= :dg_min_val")
         if max_val is not None:
-            parts.append(f"{col} <= {sql_value(max_val)}")
+            bind_params["dg_max_val"] = max_val
+            parts.append(f"{col} <= :dg_max_val")
         # Nulls pass range checks (use not_null separately)
-        return "(" + " AND ".join(parts) + f" OR {col} IS NULL)"
+        return ("(" + " AND ".join(parts) + f" OR {col} IS NULL)", bind_params)
 
     if check_name == "regex_match":
         pattern = params.get("pattern", "")
+        bind_params = {"dg_pattern": pattern}
         if dialect.name == "flink":
-            # Flink uses REGEXP_EXTRACT differently, fall back to LIKE for simple patterns
-            return f"{col} IS NULL OR REGEXP_EXTRACT({col}, {sql_value(pattern)}, 0) IS NOT NULL"
-        return f"{col} IS NULL OR {col} {dialect.regex_op} {sql_value(pattern)}"
+            # Flink SQL: REGEXP_EXTRACT returns NULL on no match.
+            # Using it as a boolean is a best-effort approach.
+            # For production Flink jobs, consider pre-processing or UDF.
+            return (
+                f"{col} IS NULL OR REGEXP_EXTRACT({col}, :dg_pattern, 0) IS NOT NULL",
+                bind_params,
+            )
+        return (f"{col} IS NULL OR {col} {dialect.regex_op} :dg_pattern", bind_params)
 
     if check_name == "in_set":
         values = params.get("allowed_values", [])
         if not values:
-            return "1=0"  # empty set = nothing passes
-        vals_str = ", ".join(sql_value(v) for v in values)
-        return f"({col} IS NULL OR {col} IN ({vals_str}))"
+            return ("1=0", {})  # empty set = nothing passes
+        bind_params = {f"dg_val_{i}": v for i, v in enumerate(values)}
+        placeholders = ", ".join(f":dg_val_{i}" for i in range(len(values)))
+        return (f"({col} IS NULL OR {col} IN ({placeholders}))", bind_params)
 
     if check_name == "min_length":
         n = params.get("min_len", 0)
-        return f"({col} IS NULL OR {dialect.length_fn}({col}) >= {n})"
+        bind_params = {"dg_min_len": n}
+        return (f"({col} IS NULL OR {dialect.length_fn}({col}) >= :dg_min_len)", bind_params)
 
     if check_name == "max_length":
         n = params.get("max_len", 0)
-        return f"({col} IS NULL OR {dialect.length_fn}({col}) <= {n})"
+        bind_params = {"dg_max_len": n}
+        return (f"({col} IS NULL OR {dialect.length_fn}({col}) <= :dg_max_len)", bind_params)
 
     # Unknown / custom checks can't be translated
     return None

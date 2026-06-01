@@ -2,7 +2,7 @@
 DataGuard - Lightweight Data Quality Validation Framework for Big Data Pipelines
 """
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 __author__ = "Zhang Zhen (zhangzhen9798@users.noreply.github.com)"
 
 from dataguard.core import DataGuard

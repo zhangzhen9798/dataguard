@@ -360,6 +360,16 @@ class TestSecurityChecks:
         with pytest.raises(ValueError, match="catastrophic backtracking"):
             regex_match("(a+)*b")
 
+    def test_regex_redos_overlapping_alt_blocked(self):
+        """Overlapping alternations with quantifiers should be rejected."""
+        with pytest.raises(ValueError, match="catastrophic backtracking"):
+            regex_match("(a|a)+b")
+
+    def test_regex_excessive_repetition_blocked(self):
+        """Excessive repetition counts should be rejected."""
+        with pytest.raises(ValueError, match="excessive repetition"):
+            regex_match(r"a{300,}")
+
     def test_regex_normal_pattern_allowed(self):
         """Normal patterns should still work fine."""
         check = regex_match(r"^[\w.-]+@[\w.-]+\.\w+$")
@@ -416,3 +426,15 @@ class TestRuleSetFromDict:
         }
         rules = RuleSet.from_dict(config)
         assert len(rules) == 1
+
+    def test_from_dict_unknown_keys_rejected(self):
+        """Unknown keys in check definition should be rejected (injection prevention)."""
+        config = {"col": [{"check": "not_null", "evil_key": "malicious"}]}
+        with pytest.raises(ValueError, match="Unknown keys"):
+            RuleSet.from_dict(config)
+
+    def test_from_dict_invalid_params_rejected(self):
+        """Invalid params should raise ValueError."""
+        config = {"col": [{"check": "in_range", "params": {"invalid_param": 123}}]}
+        with pytest.raises(ValueError, match="Invalid params"):
+            RuleSet.from_dict(config)

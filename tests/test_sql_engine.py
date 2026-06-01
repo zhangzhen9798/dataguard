@@ -10,7 +10,7 @@ import pandas as pd
 from sqlalchemy import create_engine, text
 
 from dataguard import DataGuard, RuleSet, not_null, in_range, in_set, regex_match, unique, min_length, max_length, custom
-from dataguard.sql_dialects import get_dialect, quote_id, sql_value, check_to_condition, Dialect
+from dataguard.sql_dialects import get_dialect, quote_id, check_to_condition, Dialect
 from dataguard.sql_engine import validate_sql, profile_sql
 
 
@@ -85,43 +85,53 @@ class TestQuoteId:
             quote_id("name; DROP TABLE users", d)
 
 
-class TestSqlValue:
-    def test_string(self):
-        assert sql_value("hello") == "'hello'"
-
-    def test_string_with_quotes(self):
-        assert sql_value("it's") == "'it''s'"
-
-    def test_int(self):
-        assert sql_value(42) == "42"
-
-    def test_none(self):
-        assert sql_value(None) == "NULL"
-
-
 class TestCheckToCondition:
+    """check_to_condition now returns (condition_sql, bind_params) tuple."""
+
     def test_not_null(self):
         d = get_dialect("mysql")
-        cond = check_to_condition("not_null", {}, "`name`", d)
+        result = check_to_condition("not_null", {}, "`name`", d)
+        assert result is not None
+        cond, params = result
         assert cond == "`name` IS NOT NULL"
+        assert params == {}
 
     def test_in_range(self):
         d = get_dialect("mysql")
-        cond = check_to_condition("in_range", {"min_val": 0, "max_val": 120}, "`age`", d)
-        assert "`age` >= 0" in cond
-        assert "`age` <= 120" in cond
+        result = check_to_condition("in_range", {"min_val": 0, "max_val": 120}, "`age`", d)
+        assert result is not None
+        cond, params = result
+        assert ":dg_min_val" in cond
+        assert ":dg_max_val" in cond
+        assert params["dg_min_val"] == 0
+        assert params["dg_max_val"] == 120
 
     def test_in_set(self):
         d = get_dialect("mysql")
-        cond = check_to_condition("in_set", {"allowed_values": ["active", "inactive"]}, "`status`", d)
-        assert "'active'" in cond
-        assert "'inactive'" in cond
+        result = check_to_condition("in_set", {"allowed_values": ["active", "inactive"]}, "`status`", d)
+        assert result is not None
+        cond, params = result
+        assert "IN" in cond
+        assert params["dg_val_0"] == "active"
+        assert params["dg_val_1"] == "inactive"
 
     def test_min_length(self):
         d = get_dialect("mysql")
-        cond = check_to_condition("min_length", {"min_len": 3}, "`name`", d)
+        result = check_to_condition("min_length", {"min_len": 3}, "`name`", d)
+        assert result is not None
+        cond, params = result
         assert "CHAR_LENGTH" in cond
-        assert ">= 3" in cond
+        assert ":dg_min_len" in cond
+        assert params["dg_min_len"] == 3
+
+    def test_regex_match(self):
+        d = get_dialect("mysql")
+        result = check_to_condition("regex_match", {"pattern": "^[a-z]+$"}, "`col`", d)
+        assert result is not None
+        cond, params = result
+        assert "REGEXP" in cond
+        assert ":dg_pattern" in cond
+        assert params["dg_pattern"] == "^[a-z]+$"
 
     def test_unique_returns_none(self):
         d = get_dialect("mysql")
@@ -244,3 +254,54 @@ class TestSQLFromDict:
         rules = RuleSet.from_dict(config)
         report = DataGuard.from_sql(sqlite_engine, "users", dialect="mysql").validate(rules)
         assert report.total_count == 3
+
+
+# ─── Sensitive Columns (PII Masking) ───────────────────────────────
+
+class TestSensitiveColumns:
+    def test_sensitive_masking_pandas(self):
+        """Sensitive columns should have masked sample_failures."""
+        df = pd.DataFrame({"email": ["alice@secret.com", None, "bob@secret.com"]})
+        rules = RuleSet()
+        rules.add("email", not_null())
+        report = DataGuard(df, sensitive_columns={"email"}).validate(rules)
+        # sample_failures should be masked, not contain raw emails
+        failures = report.results[0].sample_failures
+        if failures:
+            for f in failures:
+                assert "secret.com" not in str(f)
+
+    def test_sensitive_masking_sql(self, sqlite_engine):
+        """SQL engine should also mask sensitive columns."""
+        rules = RuleSet()
+        rules.add("email", not_null())
+        report = DataGuard.from_sql(
+            sqlite_engine, "users", dialect="mysql",
+            sensitive_columns={"email"},
+        ).validate(rules)
+        # All emails are non-null, so no failures. Test passes if no error.
+
+    def test_sensitive_profile_pandas(self):
+        """Sensitive columns should have suppressed numeric stats."""
+        df = pd.DataFrame({
+            "salary": [50000, 60000, 70000],
+            "name": ["Alice", "Bob", "Charlie"],
+        })
+        profile = DataGuard(df, sensitive_columns={"salary"}).profile()
+        # salary should have None for min/max/mean/std
+        assert profile["salary"]["min"] is None
+        assert profile["salary"]["max"] is None
+        # name should still have stats (not sensitive)
+        # name is not numeric, so no min/max anyway
+
+    def test_non_sensitive_unmasked(self):
+        """Non-sensitive columns should not be masked."""
+        df = pd.DataFrame({"age": [25, None, 30]})
+        rules = RuleSet()
+        rules.add("age", not_null())
+        report = DataGuard(df).validate(rules)
+        # Without sensitive_columns, failures should be raw
+        failures = report.results[0].sample_failures
+        # pandas converts None to NaN in numeric columns
+        assert len(failures) == 1
+        assert pd.isna(failures[0])

@@ -39,21 +39,20 @@ class Rule:
     threshold: float = 1.0  # Pass rate threshold (0.0 - 1.0), 1.0 = 100% must pass
 
     def __post_init__(self):
-        if self.check_name:
-            return
-        name = getattr(self.check, "__name__", "custom")
-        if name == "_check":
-            # For closure-based checks from checks.py, try to get the wrapped name
-            name = getattr(self.check, "__qualname__", "custom")
-            if "." in name:
-                name = "custom"
-        self.check_name = name
-
-        # Validate threshold range
+        # Validate threshold range first (must always run)
         if not (0.0 <= self.threshold <= 1.0):
             raise ValueError(
                 f"threshold must be between 0.0 and 1.0, got {self.threshold}"
             )
+
+        if self.check_name:
+            return
+        name = getattr(self.check, "__name__", "custom")
+        if name == "_check":
+            name = getattr(self.check, "__qualname__", "custom")
+            if "." in name:
+                name = "custom"
+        self.check_name = name
 
 
 class RuleSet:
@@ -141,7 +140,8 @@ class RuleSet:
             }
 
         Raises:
-            ValueError: If a check name is not found in the registry.
+            ValueError: If a check name is not found in the registry,
+                or if the config contains unknown keys (parameter injection prevention).
         """
         ruleset = cls()
         for column, checks in config.items():
@@ -151,9 +151,22 @@ class RuleSet:
                     raise ValueError(
                         f"Unknown check '{name}'. Available: {list(_CHECK_REGISTRY.keys())}"
                     )
+                # Only allow known keys to prevent parameter injection
+                allowed_keys = {"check", "params", "threshold"}
+                unknown_keys = set(check_def.keys()) - allowed_keys
+                if unknown_keys:
+                    raise ValueError(
+                        f"Unknown keys in check definition: {unknown_keys}. "
+                        f"Allowed keys: {allowed_keys}"
+                    )
                 factory = _CHECK_REGISTRY[name]
                 params = check_def.get("params", {})
                 threshold = check_def.get("threshold", 1.0)
-                check_fn = factory(**params)
+                try:
+                    check_fn = factory(**params)
+                except TypeError as e:
+                    raise ValueError(
+                        f"Invalid params for check '{name}': {e}"
+                    ) from e
                 ruleset.add(column, check_fn, threshold=threshold)
         return ruleset

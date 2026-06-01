@@ -33,7 +33,7 @@ jobs:
         run: ruff check dataguard/ tests/
 
       - name: Run tests
-        run: pytest --tb=short -q
+        run: pytest --tb=short -q --cov=dataguard --cov-report=term-missing
 
       - name: Check typing
         run: mypy dataguard/ --ignore-missing-imports

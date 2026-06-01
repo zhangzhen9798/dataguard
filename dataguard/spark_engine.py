@@ -1,11 +1,24 @@
 """
 PySpark-based validation engine.
+
+Supports sensitive column masking for PII protection.
 """
 
-from typing import Any, Dict, List
+import logging
+from typing import Any, Dict, List, Optional, Set
 
 from dataguard.rules import Rule, RuleSet
 from dataguard.report import ValidationResult
+
+logger = logging.getLogger(__name__)
+
+
+def _mask_value(value: Any) -> str:
+    """Mask a sensitive value for PII protection."""
+    s = str(value)
+    if len(s) <= 2:
+        return "***"
+    return s[0] + "***" + s[-1]
 
 
 def _check_spark_available():
@@ -17,13 +30,18 @@ def _check_spark_available():
         return False
 
 
-def validate_spark(df, rules: RuleSet) -> List[ValidationResult]:
-    """
-    Validate a PySpark DataFrame against a RuleSet.
+def validate_spark(
+    df,
+    rules: RuleSet,
+    sensitive_columns: Optional[Set[str]] = None,
+) -> List[ValidationResult]:
+    """Validate a PySpark DataFrame against a RuleSet.
 
     Args:
         df: A PySpark DataFrame.
         rules: A RuleSet containing validation rules.
+        sensitive_columns: Set of column names containing PII —
+            sample_failures will be masked in results.
 
     Returns:
         A list of ValidationResult objects.
@@ -36,11 +54,12 @@ def validate_spark(df, rules: RuleSet) -> List[ValidationResult]:
 
     from pyspark.sql import functions as F
 
+    sensitive = sensitive_columns or set()
     results = []
     unique_checks = _collect_unique_checks(rules)
 
     for rule in rules.rules:
-        result = _validate_spark_rule(df, rule, unique_checks, F)
+        result = _validate_spark_rule(df, rule, unique_checks, F, sensitive)
         results.append(result)
 
     return results
@@ -55,9 +74,12 @@ def _collect_unique_checks(rules: RuleSet) -> Dict[str, bool]:
     return unique_cols
 
 
-def _validate_spark_rule(df, rule: Rule, unique_checks: Dict[str, bool], F) -> ValidationResult:
+def _validate_spark_rule(
+    df, rule: Rule, unique_checks: Dict[str, bool], F, sensitive_columns: Set[str],
+) -> ValidationResult:
     """Validate a single rule against a Spark DataFrame."""
     total_rows = df.count()
+    is_sensitive = rule.column in sensitive_columns
 
     if rule.column not in df.columns:
         return ValidationResult(
@@ -69,7 +91,7 @@ def _validate_spark_rule(df, rule: Rule, unique_checks: Dict[str, bool], F) -> V
             failed_rows=total_rows,
             pass_rate=0.0,
             threshold=rule.threshold,
-            sample_failures=[f"Column '{rule.column}' not found"],
+            sample_failures=["[COLUMN_NOT_FOUND]"],
         )
 
     if rule.check_name == "unique":
@@ -89,7 +111,8 @@ def _validate_spark_rule(df, rule: Rule, unique_checks: Dict[str, bool], F) -> V
             .limit(5)
             .collect()
         )
-        sample_failures = [row[0] for row in duplicated]
+        raw_failures = [row[0] for row in duplicated]
+        sample_failures = [_mask_value(v) for v in raw_failures] if is_sensitive else raw_failures
     else:
         # Row-level check using UDF
         from pyspark.sql.types import BooleanType
@@ -110,7 +133,8 @@ def _validate_spark_rule(df, rule: Rule, unique_checks: Dict[str, bool], F) -> V
             .limit(5)
             .collect()
         )
-        sample_failures = [row[0] for row in failures]
+        raw_failures = [row[0] for row in failures]
+        sample_failures = [_mask_value(v) for v in raw_failures] if is_sensitive else raw_failures
 
     passed = pass_rate >= rule.threshold
 
@@ -127,10 +151,20 @@ def _validate_spark_rule(df, rule: Rule, unique_checks: Dict[str, bool], F) -> V
     )
 
 
-def profile_spark(df) -> Dict[str, Dict[str, Any]]:
-    """Generate a data profile for all columns in a Spark DataFrame."""
+def profile_spark(
+    df,
+    sensitive_columns: Optional[Set[str]] = None,
+) -> Dict[str, Dict[str, Any]]:
+    """Generate a data profile for all columns in a Spark DataFrame.
+
+    Args:
+        df: PySpark DataFrame to profile.
+        sensitive_columns: Set of column names containing PII —
+            min/max/mean/std stats will be suppressed for these columns.
+    """
     from pyspark.sql import functions as F
 
+    sensitive = sensitive_columns or set()
     profile = {}
     total_rows = df.count()
 
@@ -147,20 +181,26 @@ def profile_spark(df) -> Dict[str, Dict[str, Any]]:
             "distinct_count": distinct_count,
         }
 
-        # Numeric stats
-        from pyspark.sql.types import NumericType
-        if isinstance(col_type, NumericType):
-            stats = df.select(
-                F.min(col_name).alias("min"),
-                F.max(col_name).alias("max"),
-                F.mean(col_name).alias("mean"),
-                F.stddev(col_name).alias("std"),
-            ).collect()[0]
+        # Numeric stats — suppress for sensitive columns
+        if col_name in sensitive:
+            col_profile["min"] = None
+            col_profile["max"] = None
+            col_profile["mean"] = None
+            col_profile["std"] = None
+        else:
+            from pyspark.sql.types import NumericType
+            if isinstance(col_type, NumericType):
+                stats = df.select(
+                    F.min(col_name).alias("min"),
+                    F.max(col_name).alias("max"),
+                    F.mean(col_name).alias("mean"),
+                    F.stddev(col_name).alias("std"),
+                ).collect()[0]
 
-            col_profile["min"] = stats["min"]
-            col_profile["max"] = stats["max"]
-            col_profile["mean"] = stats["mean"]
-            col_profile["std"] = stats["std"]
+                col_profile["min"] = stats["min"]
+                col_profile["max"] = stats["max"]
+                col_profile["mean"] = stats["mean"]
+                col_profile["std"] = stats["std"]
 
         profile[col_name] = col_profile
 

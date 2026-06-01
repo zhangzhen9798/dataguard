@@ -14,13 +14,17 @@
 
 ---
 
-DataGuard is a lightweight data quality validation framework that works with both **Pandas** and **PySpark**. Define rules declaratively, set pass-rate thresholds, and get rich reports — without the boilerplate.
+DataGuard is a lightweight data quality validation framework that works with **Pandas**, **PySpark**, and **SQL databases** (MySQL, Hive, Flink, Doris, SelectDB). Define rules declaratively, set pass-rate thresholds, and get rich reports — without the boilerplate.
 
 ## Install
 
 ```bash
-pip install dqguard          # Pandas engine
-pip install dqguard[spark]   # With PySpark support
+pip install dqguard            # Pandas engine
+pip install dqguard[spark]     # With PySpark support
+pip install dqguard[sql]       # With SQL database support
+pip install dqguard[mysql]     # MySQL (SQLAlchemy + PyMySQL)
+pip install dqguard[hive]      # Hive (SQLAlchemy + PyHive)
+pip install dqguard[all]       # Everything
 ```
 
 ## Quick Start
@@ -69,12 +73,49 @@ rules.add("middle_name", not_null(), threshold=0.95)    # allow 5% nulls
 rules.add("transaction_id", unique(), threshold=0.999)   # 99.9% unique
 ```
 
+### SQL Database Validation
+
+Validate data directly in your database — no need to load into memory:
+
+```python
+from dataguard import DataGuard, RuleSet, not_null, in_range, in_set
+
+rules = RuleSet()
+rules.add("user_id", not_null())
+rules.add("age", in_range(0, 120))
+rules.add("status", in_set(["active", "inactive"]))
+
+# MySQL
+guardian = DataGuard.from_sql(
+    "mysql://user:pass@localhost/mydb",
+    table="users",
+    dialect="mysql",
+)
+
+# Hive
+guardian = DataGuard.from_sql(
+    "hive://cluster/default",
+    table="events",
+    dialect="hive",
+)
+
+report = guardian.validate(rules)
+```
+
+Supported dialects: `mysql`, `hive`, `flink`, `doris`, `selectdb`
+
 ### Data profiling
 
 ```python
 profile = DataGuard(df).profile()
 for col, stats in profile.items():
     print(f"{col}: {stats['distinct_count']} distinct, {stats['null_rate']:.2%} nulls")
+```
+
+Works with SQL too:
+
+```python
+profile = DataGuard.from_sql(engine, "users", dialect="mysql").profile()
 ```
 
 ### RuleSet from dict
@@ -98,14 +139,27 @@ rules = RuleSet.from_dict(config)
 # Validate a CSV file against a rule config
 dqguard validate data.csv --rules rules.json
 
+# Validate a SQL table
+dqguard validate --sql "mysql://user:pass@localhost/mydb" --table users --rules rules.json --dialect mysql
+
 # Profile a dataset
 dqguard profile data.csv
+
+# Profile a SQL table (JSON output)
+dqguard profile --sql "mysql://user:pass@localhost/mydb" --table users --json
 ```
 
 ### JSON export
 
 ```python
 print(report.to_json())   # for CI/CD integration
+```
+
+### Raise on failure
+
+```python
+# Raise ValidationError if any rule fails — useful in pipelines
+report = DataGuard(df).validate(rules, raise_on_error=True)
 ```
 
 ## PySpark
@@ -126,16 +180,16 @@ report = DataGuard(df).validate(rules)
 
 ## Built-in Checks
 
-| Check | Description |
-|-------|-------------|
-| `not_null()` | Value must not be None/NaN |
-| `unique()` | Column values must be unique |
-| `in_range(min, max)` | Numeric value within range (inclusive) |
-| `regex_match(pattern)` | String matches regex pattern |
-| `in_set(values)` | Value in allowed set |
-| `min_length(n)` | String has at least n characters |
-| `max_length(n)` | String has at most n characters |
-| `custom(fn, name)` | Custom validation function |
+| Check | Description | SQL Support |
+|-------|-------------|-------------|
+| `not_null()` | Value must not be None/NaN | Yes |
+| `unique()` | Column values must be unique | Yes |
+| `in_range(min, max)` | Numeric value within range (inclusive) | Yes |
+| `regex_match(pattern)` | String matches regex pattern | Yes (dialect-dependent) |
+| `in_set(values)` | Value in allowed set | Yes |
+| `min_length(n)` | String has at least n characters | Yes |
+| `max_length(n)` | String has at most n characters | Yes |
+| `custom(fn, name)` | Custom validation function | No (skipped with warning) |
 
 ## Project Structure
 
@@ -147,9 +201,12 @@ dataguard/
 ├── checks.py            # Built-in check functions
 ├── report.py            # ValidationReport & ValidationResult
 ├── exceptions.py        # Custom exceptions
-├── pandas_engine.py     # Pandas validation backend
+├── pandas_engine.py     # Pandas validation backend (vectorized)
 ├── spark_engine.py      # PySpark validation backend
-└── cli.py               # CLI entry point
+├── sql_engine.py        # SQL validation backend
+├── sql_dialects.py      # SQL dialect definitions
+├── cli.py               # CLI entry point
+└── py.typed             # PEP 561 type marker
 ```
 
 ## Contributing

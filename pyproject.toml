@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dqguard"
-version = "0.3.0"
+version = "0.4.0"
 description = "Lightweight data quality validation framework for big data pipelines"
 readme = "README.md"
 license = {text = "MIT"}
@@ -12,7 +12,7 @@ requires-python = ">=3.8"
 authors = [
     {name = "Zhang Zhen", email = "zhangzhen9798@users.noreply.github.com"},
 ]
-keywords = ["data-quality", "validation", "spark", "pandas", "big-data", "data-pipeline"]
+keywords = ["data-quality", "validation", "spark", "pandas", "big-data", "data-pipeline", "mysql", "hive", "doris", "sql"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -34,7 +34,18 @@ dependencies = [
 
 [project.optional-dependencies]
 spark = ["pyspark>=3.0.0"]
+sql = ["sqlalchemy>=2.0.0"]
+mysql = ["sqlalchemy>=2.0.0", "pymysql>=1.1.0"]
+hive = ["sqlalchemy>=2.0.0", "pyhive>=0.7.0"]
+doris = ["sqlalchemy>=2.0.0", "pymysql>=1.1.0"]
+selectdb = ["sqlalchemy>=2.0.0", "pymysql>=1.1.0"]
 yaml = ["pyyaml>=6.0"]
+all = [
+    "pyspark>=3.0.0",
+    "sqlalchemy>=2.0.0",
+    "pymysql>=1.1.0",
+    "pyyaml>=6.0",
+]
 dev = [
     "pytest>=7.0",
     "pytest-cov>=4.0",

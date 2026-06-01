@@ -11,46 +11,59 @@ class DataGuard:
     """
     Main entry point for data quality validation.
 
-    Supports both Pandas DataFrames and PySpark DataFrames.
+    Supports Pandas DataFrames, PySpark DataFrames, and SQL databases.
 
     Example:
         >>> import pandas as pd
         >>> from dataguard import DataGuard, RuleSet, not_null, in_range
-        >>> df = pd.DataFrame({"age": [25, 30, -1, None], "name": ["Alice", "Bob", "Charlie", "Dana"]})
+        >>> df = pd.DataFrame({"age": [25, 30, -1, None]})
         >>> rules = RuleSet()
         >>> rules.add("age", not_null())
         >>> rules.add("age", in_range(0, 120))
-        >>> guardian = DataGuard(df)
-        >>> report = guardian.validate(rules)
+        >>> report = DataGuard(df).validate(rules)
         >>> print(report.summary())
     """
 
     def __init__(self, dataframe: Any, engine: Optional[str] = None):
-        """
-        Initialize DataGuard with a DataFrame.
-
-        Args:
-            dataframe: A Pandas DataFrame or PySpark DataFrame.
-            engine: Force engine type ('pandas' or 'spark'). Auto-detected if None.
-        """
         self._dataframe = dataframe
         self._engine = self._detect_engine(dataframe, engine)
+        self._is_sql = False
+
+    @classmethod
+    def from_sql(
+        cls,
+        connection: Any,
+        table: str,
+        dialect: str = "mysql",
+        schema: Optional[str] = None,
+    ) -> "DataGuard":
+        """Create DataGuard for SQL-based validation.
+
+        Args:
+            connection: SQLAlchemy Engine or connection string.
+            table: Table name to validate.
+            dialect: SQL dialect (mysql, hive, flink, doris, selectdb).
+            schema: Optional schema/database name.
+
+        Example:
+            >>> guardian = DataGuard.from_sql(
+            ...     "mysql://user:pass@localhost/mydb",
+            ...     table="users",
+            ...     dialect="mysql",
+            ... )
+            >>> report = guardian.validate(rules)
+        """
+        instance = cls.__new__(cls)
+        instance._dataframe = None
+        instance._engine = dialect
+        instance._is_sql = True
+        instance._sql_connection = connection
+        instance._sql_table = table
+        instance._sql_schema = schema
+        return instance
 
     @staticmethod
     def _detect_engine(dataframe: Any, engine: Optional[str]) -> str:
-        """Detect whether to use Pandas or Spark engine.
-
-        Args:
-            dataframe: The DataFrame to inspect.
-            engine: Explicitly specified engine, if any.
-
-        Returns:
-            Engine name string ('pandas' or 'spark').
-
-        Raises:
-            ValueError: If an unsupported engine name is provided.
-            TypeError: If the dataframe type is not recognized.
-        """
         if engine is not None:
             if engine not in ("pandas", "spark"):
                 raise ValueError(
@@ -71,21 +84,17 @@ class DataGuard:
 
     @property
     def engine(self) -> str:
-        """Return the active engine type."""
         return self._engine
 
     def validate(self, rules: RuleSet, raise_on_error: bool = False) -> ValidationReport:
-        """
-        Run all validation rules against the DataFrame.
-
-        Args:
-            rules: A RuleSet containing validation rules.
-            raise_on_error: If True, raise ValidationError when any rule fails.
-
-        Returns:
-            ValidationReport with detailed results for each rule.
-        """
-        if self._engine == "spark":
+        """Run all validation rules against the data source."""
+        if self._is_sql:
+            from dataguard.sql_engine import validate_sql
+            results = validate_sql(
+                self._sql_connection, self._sql_table, rules,
+                dialect=self._engine, schema=self._sql_schema,
+            )
+        elif self._engine == "spark":
             from dataguard.spark_engine import validate_spark
             results = validate_spark(self._dataframe, rules)
         else:
@@ -101,12 +110,14 @@ class DataGuard:
         return report
 
     def profile(self) -> Dict[str, Dict[str, Any]]:
-        """
-        Generate a data profile for all columns.
-
-        Returns basic statistics: null count, distinct count, min, max, etc.
-        """
-        if self._engine == "spark":
+        """Generate a data profile for all columns."""
+        if self._is_sql:
+            from dataguard.sql_engine import profile_sql
+            return profile_sql(
+                self._sql_connection, self._sql_table,
+                dialect=self._engine, schema=self._sql_schema,
+            )
+        elif self._engine == "spark":
             from dataguard.spark_engine import profile_spark
             return profile_spark(self._dataframe)
         else:

@@ -2,8 +2,10 @@
 Rule definitions for DataGuard.
 """
 
-from typing import Any, Callable, Dict, List, Optional, Union
+from __future__ import annotations
+
 from dataclasses import dataclass, field
+from typing import Any, Callable
 
 from dataguard.checks import (
     not_null,
@@ -13,11 +15,17 @@ from dataguard.checks import (
     in_set,
     min_length,
     max_length,
-    custom,
+    is_numeric,
+    is_email,
+    is_date,
+    not_empty_string,
+    max_value,
+    min_value,
 )
+from dataguard.utils import CheckSpec
 
 # Map check names to factory functions for from_dict()
-_CHECK_REGISTRY: Dict[str, Callable] = {
+_CHECK_REGISTRY: dict[str, Callable[..., CheckSpec]] = {
     "not_null": not_null,
     "unique": unique,
     "in_range": in_range,
@@ -25,6 +33,12 @@ _CHECK_REGISTRY: Dict[str, Callable] = {
     "in_set": in_set,
     "min_length": min_length,
     "max_length": max_length,
+    "is_numeric": is_numeric,
+    "is_email": is_email,
+    "is_date": is_date,
+    "not_empty_string": not_empty_string,
+    "max_value": max_value,
+    "min_value": min_value,
 }
 
 
@@ -33,9 +47,9 @@ class Rule:
     """A single validation rule bound to a column."""
 
     column: str
-    check: Callable
+    check: CheckSpec
     check_name: str = ""
-    params: Dict[str, Any] = field(default_factory=dict)
+    params: dict[str, Any] = field(default_factory=dict)
     threshold: float = 1.0  # Pass rate threshold (0.0 - 1.0), 1.0 = 100% must pass
 
     def __post_init__(self):
@@ -67,14 +81,14 @@ class RuleSet:
     """
 
     def __init__(self):
-        self._rules: List[Rule] = []
+        self._rules: list[Rule] = []
 
     def add(
         self,
         column: str,
-        check: Callable,
+        check: CheckSpec,
         check_name: str = "",
-        params: Optional[Dict[str, Any]] = None,
+        params: dict[str, Any] | None = None,
         threshold: float = 1.0,
     ) -> "RuleSet":
         """
@@ -82,7 +96,7 @@ class RuleSet:
 
         Args:
             column: Column name to validate.
-            check: Check function (from dataguard.checks).
+            check: CheckSpec from dataguard.checks.
             check_name: Human-readable name for the check.
             params: Parameters passed to the check.
             threshold: Minimum pass rate (0.0 - 1.0).
@@ -101,15 +115,15 @@ class RuleSet:
         return self
 
     @property
-    def rules(self) -> List[Rule]:
+    def rules(self) -> list[Rule]:
         """Return all rules."""
         return self._rules
 
-    def columns(self) -> List[str]:
+    def columns(self) -> list[str]:
         """Return unique column names that have rules."""
         return list(dict.fromkeys(r.column for r in self._rules))
 
-    def get_rules_for_column(self, column: str) -> List[Rule]:
+    def get_rules_for_column(self, column: str) -> list[Rule]:
         """Return all rules for a specific column."""
         return [r for r in self._rules if r.column == column]
 
@@ -120,7 +134,7 @@ class RuleSet:
         return f"RuleSet({len(self._rules)} rules on {len(self.columns())} columns)"
 
     @classmethod
-    def from_dict(cls, config: Dict[str, List[Dict[str, Any]]]) -> "RuleSet":
+    def from_dict(cls, config: dict[str, list[dict[str, Any]]]) -> "RuleSet":
         """Create a RuleSet from a dictionary config.
 
         Args:
@@ -165,8 +179,6 @@ class RuleSet:
                 try:
                     check_fn = factory(**params)
                 except TypeError as e:
-                    raise ValueError(
-                        f"Invalid params for check '{name}': {e}"
-                    ) from e
+                    raise ValueError(f"Invalid params for check '{name}': {e}") from e
                 ruleset.add(column, check_fn, threshold=threshold)
         return ruleset

@@ -2,7 +2,9 @@
 DataGuard - Lightweight Data Quality Validation Framework for Big Data Pipelines
 """
 
-__version__ = "0.5.0"
+from __future__ import annotations
+
+__version__ = "0.6.0"
 __author__ = "Zhang Zhen (zhangzhen9798@users.noreply.github.com)"
 
 from dataguard.core import DataGuard
@@ -15,8 +17,16 @@ from dataguard.checks import (
     in_set,
     min_length,
     max_length,
+    is_numeric,
+    is_email,
+    is_date,
+    not_empty_string,
+    max_value,
+    min_value,
     custom,
 )
+from dataguard.report import ValidationReport
+from dataguard.utils import CheckLevel, CheckSpec, EngineType
 
 __all__ = [
     "DataGuard",
@@ -29,5 +39,15 @@ __all__ = [
     "in_set",
     "min_length",
     "max_length",
+    "is_numeric",
+    "is_email",
+    "is_date",
+    "not_empty_string",
+    "max_value",
+    "min_value",
     "custom",
+    "CheckSpec",
+    "CheckLevel",
+    "EngineType",
+    "ValidationReport",
 ]

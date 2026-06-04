@@ -5,59 +5,80 @@ Each dialect specifies how to generate SQL for different database engines.
 All value parameters use SQLAlchemy :bindparam syntax to prevent SQL injection.
 """
 
-from dataclasses import dataclass, field
-from typing import Dict, Optional, Tuple
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any
 
 
 @dataclass
 class Dialect:
     """SQL dialect configuration."""
+
     name: str
+    # Regex operator: "REGEXP" (MySQL/Doris), "RLIKE" (Hive),
+    #   "REGEXP_PATTERN" (Flink 1.14+), "REGEXP_EXTRACT" (Flink <1.14)
     regex_op: str = "REGEXP"
+    # Function that accepts a literal pattern (no bind param needed):
+    #   empty → use  col {regex_op} :param   (MySQL/Hive/Doris)
+    #   non-empty → use  func(:param)             (Flink 1.14+)
+    regex_pattern_fn: str = ""
     length_fn: str = "CHAR_LENGTH"
+    # SQL fragment that returns TRUE when the column value is a valid date
+    #   (using a bind parameter :dg_date_val for the sample value).
+    #   MySQL/Doris: "STR_TO_DATE({col}, :dg_date_fmt) IS NOT NULL"
+    #   Hive:      "to_date(from_unixtime(unix_timestamp({col}, :dg_date_fmt))) IS NOT NULL"
+    #   Flink:      "TO_DATE({col}, :dg_date_fmt) IS NOT NULL"
+    date_test_sql: str = "STR_TO_DATE({col}, :dg_date_fmt) IS NOT NULL"
     quote: str = "`"
-    # For Hive/Flink which use different null-coalesce
     supports_filter: bool = True
-    # LIMIT syntax
     limit_fmt: str = "LIMIT {n}"
 
 
 # Built-in dialect definitions
-DIALECTS: Dict[str, Dialect] = {
+DIALECTS: dict[str, Dialect] = {
     "mysql": Dialect(
         name="mysql",
         regex_op="REGEXP",
         length_fn="CHAR_LENGTH",
+        date_test_sql="STR_TO_DATE({col}, :dg_date_fmt) IS NOT NULL",
         quote="`",
     ),
     "hive": Dialect(
         name="hive",
         regex_op="RLIKE",
         length_fn="LENGTH",
+        date_test_sql=(
+            "to_date(from_unixtime("
+            "  unix_timestamp({col}, :dg_date_fmt)"
+            ")) IS NOT NULL"
+        ),
         quote="`",
     ),
     "flink": Dialect(
         name="flink",
+        # Will be upgraded to "REGEXP_PATTERN" when Flink >= 1.14 is detected
         regex_op="REGEXP_EXTRACT",
+        regex_pattern_fn="",
         length_fn="CHAR_LENGTH",
+        date_test_sql="TO_DATE({col}, :dg_date_fmt) IS NOT NULL",
         quote="`",
     ),
     "doris": Dialect(
         name="doris",
         regex_op="REGEXP",
         length_fn="CHAR_LENGTH",
+        date_test_sql="STR_TO_DATE({col}, :dg_date_fmt) IS NOT NULL",
         quote="`",
     ),
     "selectdb": Dialect(
         name="selectdb",
         regex_op="REGEXP",
         length_fn="CHAR_LENGTH",
+        date_test_sql="STR_TO_DATE({col}, :dg_date_fmt) IS NOT NULL",
         quote="`",
     ),
 }
-
-# Doris and SelectDB speak MySQL protocol
-_MYSQL_PROTOCOL_DIALECTS = {"doris", "selectdb"}
 
 
 def get_dialect(name: str) -> Dialect:
@@ -74,10 +95,10 @@ def quote_id(name: str, dialect: Dialect) -> str:
 
     Validates the identifier to prevent SQL injection before quoting.
     """
-    # Validate: only alphanumeric, underscores, dots, hyphens
-    cleaned = name.replace(".", "").replace("_", "").replace("-", "")
-    if not cleaned.isalnum():
-        raise ValueError(f"Invalid SQL identifier: {name}")
+    from dataguard.utils import validate_identifier
+
+    validate_identifier(name)
+
     q = dialect.quote
     # Handle schema.table format
     if "." in name:
@@ -88,17 +109,24 @@ def quote_id(name: str, dialect: Dialect) -> str:
 
 # ─── SQL Condition Generation ─────────────────────────────────────
 
+# Numeric detection regex — good enough for most databases.
+# Allows optional sign, optional integer part, required digit after dot.
+_RE_NUMERIC = r"^[+-]?[0-9]*\.?[0-9]+$"
+
+
 def check_to_condition(
-    check_name: str, params: dict, col: str, dialect: Dialect
-) -> Optional[Tuple[str, Dict[str, object]]]:
+    check_name: str, params: dict[str, Any], col: str, dialect: Dialect
+) -> tuple[str, dict[str, object]] | None:
     """Translate a check into a SQL WHERE condition with parameterized values.
 
     Returns a tuple of (condition_sql, bind_params) where bind_params
     uses SQLAlchemy :param_name syntax, or None if the check cannot
     be translated to SQL.
 
-    The condition_sql that a PASSING row satisfies.
+    The condition_sql describes rows that PASS the check.
     """
+    # ── Row-level checks ──────────────────────────────────────────
+
     if check_name == "not_null":
         return (f"{col} IS NOT NULL", {})
 
@@ -107,8 +135,8 @@ def check_to_condition(
         return None
 
     if check_name == "in_range":
-        parts = []
-        bind_params: Dict[str, object] = {}
+        parts: list[str] = []
+        bind_params: dict[str, object] = {}
         min_val = params.get("min_val")
         max_val = params.get("max_val")
         if min_val is not None:
@@ -123,15 +151,7 @@ def check_to_condition(
     if check_name == "regex_match":
         pattern = params.get("pattern", "")
         bind_params = {"dg_pattern": pattern}
-        if dialect.name == "flink":
-            # Flink SQL: REGEXP_EXTRACT returns NULL on no match.
-            # Using it as a boolean is a best-effort approach.
-            # For production Flink jobs, consider pre-processing or UDF.
-            return (
-                f"{col} IS NULL OR REGEXP_EXTRACT({col}, :dg_pattern, 0) IS NOT NULL",
-                bind_params,
-            )
-        return (f"{col} IS NULL OR {col} {dialect.regex_op} :dg_pattern", bind_params)
+        return _regex_condition(col, dialect, bind_params)
 
     if check_name == "in_set":
         values = params.get("allowed_values", [])
@@ -144,12 +164,106 @@ def check_to_condition(
     if check_name == "min_length":
         n = params.get("min_len", 0)
         bind_params = {"dg_min_len": n}
-        return (f"({col} IS NULL OR {dialect.length_fn}({col}) >= :dg_min_len)", bind_params)
+        return (
+            f"({col} IS NULL OR {dialect.length_fn}({col}) >= :dg_min_len)",
+            bind_params,
+        )
 
     if check_name == "max_length":
         n = params.get("max_len", 0)
         bind_params = {"dg_max_len": n}
-        return (f"({col} IS NULL OR {dialect.length_fn}({col}) <= :dg_max_len)", bind_params)
+        return (
+            f"({col} IS NULL OR {dialect.length_fn}({col}) <= :dg_max_len)",
+            bind_params,
+        )
+
+    # ── New checks (v0.6) ──────────────────────────────────────
+
+    if check_name == "is_numeric":
+        # Use CAST to REAL (works on MySQL, SQLite, Hive, Doris, Flink)
+        # NULLs pass; non-numeric strings become NULL after CAST → IS NOT NULL fails
+        return (
+            f"({col} IS NULL OR CAST({col} AS REAL) IS NOT NULL)",
+            {},
+        )
+
+    if check_name == "is_email":
+        pattern = params.get(
+            "pattern", r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$"
+        )
+        bind_params = {"dg_pattern": pattern}
+        return _regex_condition(col, dialect, bind_params)
+
+    if check_name == "is_date":
+        fmt = params.get("format_str")
+        if not fmt:
+            # No format string → cannot translate safely
+            return None
+        # Convert Python strptime format to the SQL dialect's format placeholder
+        sql = dialect.date_test_sql.format(col=col)
+        return (sql, {"dg_date_fmt": _pyfmt_to_sql(fmt, dialect)})
+
+    if check_name == "not_empty_string":
+        # TRIM() removes whitespace; NULLs pass
+        return (f"({col} IS NULL OR TRIM({col}) != '')", {})
+
+    # ── Column-level checks (handled by the engine, not here) ─────
+
+    if check_name in {"max_value", "min_value"}:
+        # Aggregation queries are built directly in sql_engine.py
+        return None
 
     # Unknown / custom checks can't be translated
     return None
+
+
+# ─── Helpers ──────────────────────────────────────────────────────
+
+
+def _regex_condition(
+    col: str, dialect: Dialect, bind_params: dict[str, object]
+) -> tuple[str, dict[str, object]]:
+    """Build a SQL condition for regex matching, dialect-aware."""
+    if dialect.regex_pattern_fn:
+        # Flink 1.14+:  REGEXP_PATTERN(:dg_pattern)
+        fn = dialect.regex_pattern_fn
+        return (
+            f"{col} IS NULL OR {fn}({col}, :dg_pattern)",
+            bind_params,
+        )
+    if dialect.name == "flink":
+        # Flink < 1.14 workaround: REGEXP_EXTRACT returns NULL on no match
+        return (
+            f"{col} IS NULL OR REGEXP_EXTRACT({col}, :dg_pattern, 0) IS NOT NULL",
+            bind_params,
+        )
+    # MySQL / Hive / Doris / SelectDB
+    return (
+        f"{col} IS NULL OR {col} {dialect.regex_op} :dg_pattern",
+        bind_params,
+    )
+
+
+def _pyfmt_to_sql(fmt: str, dialect: Dialect) -> str:
+    """Convert a Python strptime format string to a SQL dialect format string.
+
+    This is a *best-effort* conversion; exotic format codes are left
+    as-is (most databases understand ``%Y-%m-%d`` style codes).
+    """
+    # Fast path: already a SQL-style format
+    if "%" not in fmt:
+        return fmt
+    # Common mappings
+    mapping = {
+        "%Y": "%Y",
+        "%y": "%y",
+        "%m": "%m",
+        "%d": "%d",
+        "%H": "%H",
+        "%M": "%M",
+        "%S": "%S",
+    }
+    result = fmt
+    for py, sql in mapping.items():
+        result = result.replace(py, sql)
+    return result

@@ -15,12 +15,18 @@ from dataguard.checks import (
     in_set,
     min_length,
     max_length,
+    is_numeric,
+    is_email,
+    is_date,
+    not_empty_string,
+    max_value,
+    min_value,
     custom,
 )
 from dataguard.exceptions import ValidationError
 
 
-# ─── Min Length Tests ──────────────────────────────────────────────
+# ─── Min Length Tests ──────────────────────────────────────
 
 class TestMinLength:
     def test_pass(self):
@@ -56,7 +62,7 @@ class TestMinLength:
             min_length(-1)
 
 
-# ─── Max Length Tests ──────────────────────────────────────────────
+# ─── Max Length Tests ──────────────────────────────────────
 
 class TestMaxLength:
     def test_pass(self):
@@ -92,7 +98,244 @@ class TestMaxLength:
             max_length(-1)
 
 
-# ─── Custom Check Tests ────────────────────────────────────────────
+# ─── IsNumeric Tests ──────────────────────────────────────
+
+class TestIsNumeric:
+    def test_pass_int(self):
+        df = pd.DataFrame({"val": [1, 2, 3]})
+        rules = RuleSet()
+        rules.add("val", is_numeric())
+        report = DataGuard(df).validate(rules)
+        assert report.is_valid
+
+    def test_pass_float(self):
+        df = pd.DataFrame({"val": [1.5, -2.3, 0.0]})
+        rules = RuleSet()
+        rules.add("val", is_numeric())
+        report = DataGuard(df).validate(rules)
+        assert report.is_valid
+
+    def test_pass_negative_zero(self):
+        df = pd.DataFrame({"val": [0, -0.0, 3.14]})
+        rules = RuleSet()
+        rules.add("val", is_numeric())
+        report = DataGuard(df).validate(rules)
+        assert report.is_valid
+
+    def test_fail_string(self):
+        df = pd.DataFrame({"val": ["abc", "1.5", "xyz"]})
+        rules = RuleSet()
+        rules.add("val", is_numeric())
+        report = DataGuard(df).validate(rules)
+        assert report.results[0].failed_rows >= 2
+
+    def test_fail_bool_rejected(self):
+        """bool is subclass of int in Python; is_numeric() rejects it."""
+        df = pd.DataFrame({"val": [True, False, 1]})
+        rules = RuleSet()
+        rules.add("val", is_numeric())
+        report = DataGuard(df).validate(rules)
+        # True/False should fail (rejected), 1 passes
+        assert report.results[0].passed_rows == 1
+
+    def test_none_passes(self):
+        df = pd.DataFrame({"val": [1, None, 3.14]})
+        rules = RuleSet()
+        rules.add("val", is_numeric())
+        report = DataGuard(df).validate(rules)
+        assert report.is_valid  # None passes
+
+    def test_nan_passes(self):
+        df = pd.DataFrame({"val": [1.0, np.nan, 3.0]})
+        rules = RuleSet()
+        rules.add("val", is_numeric())
+        report = DataGuard(df).validate(rules)
+        assert report.is_valid  # NaN passes (None-like)
+
+
+# ─── IsEmail Tests ──────────────────────────────────────
+
+class TestIsEmail:
+    def test_pass_valid_emails(self):
+        df = pd.DataFrame({"email": [
+            "alice@example.com",
+            "b.ob+joe@company.co.uk",
+            "user@local.host",
+        ]})
+        rules = RuleSet()
+        rules.add("email", is_email())
+        report = DataGuard(df).validate(rules)
+        assert report.is_valid
+
+    def test_fail_invalid_emails(self):
+        df = pd.DataFrame({"email": [
+            "no-at-sign",
+            "@missing-local.org",
+            "missing-domain@",
+            "spaces not@allowed.com",
+        ]})
+        rules = RuleSet()
+        rules.add("email", is_email())
+        report = DataGuard(df).validate(rules)
+        assert not report.is_valid
+
+    def test_none_passes(self):
+        df = pd.DataFrame({"email": ["alice@example.com", None]})
+        rules = RuleSet()
+        rules.add("email", is_email())
+        report = DataGuard(df).validate(rules)
+        assert report.is_valid
+
+
+# ─── IsDate Tests ──────────────────────────────────────
+
+class TestIsDate:
+    def test_pass_with_format(self):
+        df = pd.DataFrame({"dt": ["2024-01-15", "2024-12-31"]})
+        rules = RuleSet()
+        rules.add("dt", is_date("%Y-%m-%d"))
+        report = DataGuard(df).validate(rules)
+        assert report.is_valid
+
+    def test_fail_wrong_format(self):
+        df = pd.DataFrame({"dt": ["15/01/2024", "2024-01-15"]})
+        rules = RuleSet()
+        rules.add("dt", is_date("%Y-%m-%d"))
+        report = DataGuard(df).validate(rules)
+        assert not report.is_valid
+
+    def test_pass_auto_detect(self):
+        df = pd.DataFrame({"dt": ["2024-01-15", "2024/06/30"]})
+        rules = RuleSet()
+        rules.add("dt", is_date())  # no format = auto-detect
+        report = DataGuard(df).validate(rules)
+        # At least one should be detected
+        assert report.results[0].passed_rows >= 1
+
+    def test_none_passes(self):
+        df = pd.DataFrame({"dt": ["2024-01-15", None]})
+        rules = RuleSet()
+        rules.add("dt", is_date("%Y-%m-%d"))
+        report = DataGuard(df).validate(rules)
+        assert report.is_valid
+
+    def test_invalid_format_raises(self):
+        with pytest.raises(ValueError, match="Invalid format string"):
+            is_date("%Q")
+
+
+# ─── NotEmptyString Tests ──────────────────────────────────────
+
+class TestNotEmptyString:
+    def test_pass_normal_string(self):
+        df = pd.DataFrame({"val": ["hello", "world"]})
+        rules = RuleSet()
+        rules.add("val", not_empty_string())
+        report = DataGuard(df).validate(rules)
+        assert report.is_valid
+
+    def test_fail_empty_string(self):
+        df = pd.DataFrame({"val": ["hello", "", "world"]})
+        rules = RuleSet()
+        rules.add("val", not_empty_string())
+        report = DataGuard(df).validate(rules)
+        assert not report.is_valid
+
+    def test_fail_whitespace_only(self):
+        df = pd.DataFrame({"val": ["hello", "   ", "\t\n", "world"]})
+        rules = RuleSet()
+        rules.add("val", not_empty_string())
+        report = DataGuard(df).validate(rules)
+        assert not report.is_valid
+
+    def test_none_passes(self):
+        df = pd.DataFrame({"val": ["hello", None]})
+        rules = RuleSet()
+        rules.add("val", not_empty_string())
+        report = DataGuard(df).validate(rules)
+        assert report.is_valid
+
+    def test_number_converted(self):
+        df = pd.DataFrame({"val": ["123", 456]})
+        rules = RuleSet()
+        rules.add("val", not_empty_string())
+        report = DataGuard(df).validate(rules)
+        assert report.is_valid
+
+
+# ─── MaxValue Tests (Column-level) ──────────────────────────────
+
+class TestMaxValue:
+    def test_pass(self):
+        df = pd.DataFrame({"age": [25, 30, 45]})
+        rules = RuleSet()
+        rules.add("age", max_value(100))
+        report = DataGuard(df).validate(rules)
+        assert report.is_valid
+
+    def test_fail(self):
+        df = pd.DataFrame({"age": [25, 130, 45]})
+        rules = RuleSet()
+        rules.add("age", max_value(120))
+        report = DataGuard(df).validate(rules)
+        assert not report.is_valid
+
+    def test_exact_boundary(self):
+        df = pd.DataFrame({"score": [0.0, 100.0, 50.5]})
+        rules = RuleSet()
+        rules.add("score", max_value(100.0))
+        report = DataGuard(df).validate(rules)
+        assert report.is_valid
+
+    def test_with_none(self):
+        df = pd.DataFrame({"age": [25, None, 45]})
+        rules = RuleSet()
+        rules.add("age", max_value(120))
+        report = DataGuard(df).validate(rules)
+        assert report.is_valid  # None ignored
+
+    def test_invalid_non_numeric_raises(self):
+        with pytest.raises(ValueError, match="requires a numeric argument"):
+            max_value("not_a_number")
+
+
+# ─── MinValue Tests (Column-level) ──────────────────────────────
+
+class TestMinValue:
+    def test_pass(self):
+        df = pd.DataFrame({"age": [25, 30, 45]})
+        rules = RuleSet()
+        rules.add("age", min_value(0))
+        report = DataGuard(df).validate(rules)
+        assert report.is_valid
+
+    def test_fail(self):
+        df = pd.DataFrame({"age": [25, -5, 45]})
+        rules = RuleSet()
+        rules.add("age", min_value(0))
+        report = DataGuard(df).validate(rules)
+        assert not report.is_valid
+
+    def test_exact_boundary(self):
+        df = pd.DataFrame({"score": [0.0, 100.0, 50.5]})
+        rules = RuleSet()
+        rules.add("score", min_value(0.0))
+        report = DataGuard(df).validate(rules)
+        assert report.is_valid
+
+    def test_with_none(self):
+        df = pd.DataFrame({"age": [25, None, 45]})
+        rules = RuleSet()
+        rules.add("age", min_value(0))
+        report = DataGuard(df).validate(rules)
+        assert report.is_valid  # None ignored
+
+    def test_invalid_non_numeric_raises(self):
+        with pytest.raises(ValueError, match="requires a numeric argument"):
+            min_value(None)
+
+
+# ─── Custom Check Tests ──────────────────────────────────────
 
 class TestCustom:
     def test_custom_check_pass(self):
@@ -128,7 +371,6 @@ class TestEdgeCases:
         rules = RuleSet()
         rules.add("a", not_null())
         report = DataGuard(df).validate(rules)
-        # Empty dataframe should have no results or be considered valid
         assert report.total_count >= 0
 
     def test_single_row_pass(self):
@@ -170,7 +412,7 @@ class TestEdgeCases:
         assert not report.is_valid
 
 
-# ─── Threshold Edge Cases ──────────────────────────────────────────
+# ─── Threshold Edge Cases ──────────────────────────────────────
 
 class TestThresholdEdgeCases:
     def test_threshold_zero_always_passes(self):
@@ -178,7 +420,6 @@ class TestThresholdEdgeCases:
         rules = RuleSet()
         rules.add("name", not_null(), threshold=0.0)
         report = DataGuard(df).validate(rules)
-        # threshold=0 should always pass (no minimum pass rate required)
         assert report.is_valid
 
     def test_threshold_one_strict(self):
@@ -186,7 +427,6 @@ class TestThresholdEdgeCases:
         rules = RuleSet()
         rules.add("name", not_null(), threshold=1.0)
         report = DataGuard(df).validate(rules)
-        # threshold=1.0 means all must pass; one is None so fail
         assert not report.is_valid
 
     def test_threshold_invalid_negative(self):
@@ -200,14 +440,13 @@ class TestThresholdEdgeCases:
             Rule(column="test", check=lambda: True, threshold=1.5)
 
     def test_threshold_boundary_0_0_and_1_0(self):
-        """Both boundaries are valid."""
         from dataguard.rules import Rule
         for t in [0.0, 0.5, 1.0]:
             r = Rule(column="x", check=lambda: True, threshold=t)
             assert r.threshold == t
 
 
-# ─── InRange Parameter Validation ─────────────────────────────────
+# ─── InRange Parameter Validation ──────────────────────────────────────
 
 class TestInRangeValidation:
     def test_no_bounds_raises(self):
@@ -219,7 +458,7 @@ class TestInRangeValidation:
             in_range(min_val=20, max_val=10)
 
 
-# ─── Regex Match Edge Cases ───────────────────────────────────────
+# ─── Regex Match Edge Cases ──────────────────────────────────────
 
 class TestRegexMatchEdgeCases:
     def test_empty_string(self):
@@ -241,7 +480,7 @@ class TestRegexMatchEdgeCases:
         assert report.passed_count == 1
 
 
-# ─── InSet Edge Cases ─────────────────────────────────────────────
+# ─── InSet Edge Cases ──────────────────────────────────────
 
 class TestInSetEdgeCases:
     def test_empty_set_all_fail(self):
@@ -256,12 +495,12 @@ class TestInSetEdgeCases:
         rules = RuleSet()
         rules.add("flag", in_set([True]))
         report = DataGuard(df).validate(rules)
-        # False is not in {True}, so 2/3 rows pass = 66.7%, below default threshold=1.0
+        # False is not in {True}, so 2/3 rows pass
         assert report.total_count == 1
         assert not report.is_valid
 
 
-# ─── Engine Detection Tests ───────────────────────────────────────
+# ─── Engine Detection Tests ──────────────────────────────────────
 
 class TestEngineDetection:
     def test_explicit_pandas_engine(self):
@@ -283,7 +522,7 @@ class TestEngineDetection:
             DataGuard([1, 2, 3])
 
 
-# ─── NotNull pd.NA Support ─────────────────────────────────────────
+# ─── NotNull pd.NA Support ──────────────────────────────────────
 
 class TestNotNullPdNA:
     def test_pd_na_fails(self):
@@ -299,7 +538,7 @@ class TestNotNullPdNA:
             pytest.skip("pd.NA not available")
 
 
-# ─── Multiple Rules on Same Column ─────────────────────────────────
+# ─── Multiple Rules on Same Column ──────────────────────────────
 
 class TestSameColumnMultipleRules:
     def test_same_column_two_rules(self):
@@ -312,7 +551,7 @@ class TestSameColumnMultipleRules:
         assert not report.is_valid
 
 
-# ─── Profile Edge Cases ────────────────────────────────────────────
+# ─── Profile Edge Cases ──────────────────────────────────────
 
 class TestProfileEdgeCases:
     def test_profile_empty_dataframe(self):
@@ -334,7 +573,7 @@ class TestProfileEdgeCases:
         assert profile["text"]["distinct_count"] == 2
 
 
-# ─── Report Edge Cases ────────────────────────────────────────────
+# ─── Report Edge Cases ──────────────────────────────────────
 
 class TestReportEdgeCases:
     def test_report_with_all_passing(self):
@@ -348,7 +587,7 @@ class TestReportEdgeCases:
         assert report.failed_count == 0
 
 
-# ─── Security Tests ────────────────────────────────────────────────
+# ─── Security Tests ──────────────────────────────────────
 
 class TestSecurityChecks:
     def test_regex_redos_blocked(self):
@@ -360,7 +599,7 @@ class TestSecurityChecks:
         with pytest.raises(ValueError, match="catastrophic backtracking"):
             regex_match("(a+)*b")
 
-    def test_regex_redos_overlapping_alt_blocked(self):
+    def test_regex_overlapping_alt_blocked(self):
         """Overlapping alternations with quantifiers should be rejected."""
         with pytest.raises(ValueError, match="catastrophic backtracking"):
             regex_match("(a|a)+b")
@@ -438,3 +677,35 @@ class TestRuleSetFromDict:
         config = {"col": [{"check": "in_range", "params": {"invalid_param": 123}}]}
         with pytest.raises(ValueError, match="Invalid params"):
             RuleSet.from_dict(config)
+
+    # ── New checks in from_dict ────────────────────────────
+
+    def test_from_dict_is_numeric(self):
+        config = {"val": [{"check": "is_numeric"}]}
+        rules = RuleSet.from_dict(config)
+        assert len(rules) == 1
+
+    def test_from_dict_is_email(self):
+        config = {"email": [{"check": "is_email"}]}
+        rules = RuleSet.from_dict(config)
+        assert len(rules) == 1
+
+    def test_from_dict_is_date(self):
+        config = {"dt": [{"check": "is_date", "params": {"format_str": "%Y-%m-%d"}}]}
+        rules = RuleSet.from_dict(config)
+        assert len(rules) == 1
+
+    def test_from_dict_not_empty_string(self):
+        config = {"name": [{"check": "not_empty_string"}]}
+        rules = RuleSet.from_dict(config)
+        assert len(rules) == 1
+
+    def test_from_dict_max_value(self):
+        config = {"age": [{"check": "max_value", "params": {"max_val": 120}}]}
+        rules = RuleSet.from_dict(config)
+        assert len(rules) == 1
+
+    def test_from_dict_min_value(self):
+        config = {"age": [{"check": "min_value", "params": {"min_val": 0}}]}
+        rules = RuleSet.from_dict(config)
+        assert len(rules) == 1

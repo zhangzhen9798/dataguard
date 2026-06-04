@@ -155,6 +155,29 @@ dqguard profile --sql "mysql://user:pass@localhost/mydb" --table users --json
 print(report.to_json())   # for CI/CD integration
 ```
 
+### HTML visualization
+
+Generate a self-contained, stylish HTML report — no external dependencies:
+
+```python
+report = DataGuard(df).validate(rules)
+
+# Save to file
+report.to_html("validation_report.html")
+
+# Or get as string
+html_string = report.to_html()
+```
+
+Features:
+- Dark Glassmorphism theme with animated SVG icons
+- Circular progress ring for overall pass rate
+- Animated counter cards (total/passed/failed)
+- Expandable failure details with sample data
+- Sensitive column auto-masking
+- Responsive design (desktop, tablet, mobile)
+- XSS-safe with built-in HTML escaping
+
 ### Raise on failure
 
 ```python
@@ -189,6 +212,12 @@ report = DataGuard(df).validate(rules)
 | `in_set(values)` | Value in allowed set | Yes |
 | `min_length(n)` | String has at least n characters | Yes |
 | `max_length(n)` | String has at most n characters | Yes |
+| `is_numeric()` | Value must be numeric | Yes |
+| `is_email()` | Value must be a valid email address | Yes |
+| `is_date(format_str)` | Value must be a valid date (optional format) | Yes |
+| `not_empty_string()` | String must be non-empty (not blank) | Yes |
+| `max_value(max_val)` | Column maximum must not exceed `max_val` | Yes |
+| `min_value(min_val)` | Column minimum must not be below `min_val` | Yes |
 | `custom(fn, name)` | Custom validation function | No (skipped with warning) |
 
 ## Project Structure

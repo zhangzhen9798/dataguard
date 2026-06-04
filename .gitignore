@@ -49,3 +49,18 @@ logs/
 # OS
 .DS_Store
 Thumbs.db
+
+# Temp/debug files
+*_output.txt
+*_output2.txt
+test_*.txt
+!tests/
+black_output.txt
+mypy_output.txt
+ruff_output.txt
+run_*.py
+publish.py
+ITERATION_SUMMARY.md
+
+# CodeBuddy
+.codebuddy/

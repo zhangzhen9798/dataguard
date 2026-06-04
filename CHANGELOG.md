@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-06-04
+
+### Added
+- **6 new built-in checks**: `is_numeric()`, `is_email()`, `is_date()`, `not_empty_string()`, `max_value()`, `min_value()` — all with full Pandas, PySpark, and SQL support
+- **HTML visualization report**: `ValidationReport.to_html()` generates self-contained, visually appealing Glassmorphism dark-theme HTML reports with SVG icons, animated progress ring, and collapsible failure details
+- **Column-level checks**: `unique()`, `max_value()`, `min_value()` use aggregate SQL queries for better semantics and performance
+- **Flink version auto-detection**: `regex_match` auto-upgrades to `REGEXP_PATTERN` for Flink >= 1.14
+- **Sensitive column masking**: masked values in report output via `mask_value()` helper
+- **XSS protection**: HTML escaping in `to_html()` report generation
+- 40+ new tests covering all new checks, SQL dialects, and HTML report output
+- `CheckSpec` dataclass for structured check metadata across all engines
+- `CheckLevel` enum (`ROW` / `COLUMN`) for distinguishing row-level vs aggregate checks
+
+### Changed
+- `sql_dialects.py`: `Dialect` dataclass extended with `regex_pattern_fn`, `date_test_sql`, `_pyfmt_to_sql()` helper
+- `check_to_condition()` rewritten to support all 14 built-in checks across 5 SQL dialects
+- `_CHECK_REGISTRY` type annotation improved from `dict[str, object]` to `dict[str, Callable[..., CheckSpec]]`
+- `_HasRules` protocol updated to match `RuleSet` actual interface (read-only `rules` property)
+- Minimum Python version raised to 3.9 (3.8 EOL)
+
+### Fixed
+- `is_numeric` now correctly rejects booleans and passes `None` values
+- `is_email` regex pattern matches proper TLD domains
+- SQLite dialect behavior documented — `CAST('text' AS REAL)` returns `0.0` (lax type conversion)
+
 ## [0.5.0] - 2026-06-01
 
 ### Added
